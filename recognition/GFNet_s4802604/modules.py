@@ -22,3 +22,41 @@ class BaselineCNN(nn.Module):
 
     def forward(self, x):
         return self.classifier(self.pool(self.features(x)).flatten(1))
+
+
+class GFNetBlock(nn.Module):
+    """norm -> frequency filter -> norm -> MLP, with one residual connection."""
+
+    def __init__(self, dim, h, w, mlp_ratio=4, drop=0.1):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        self.filter = GlobalFilter(dim, h, w)
+        self.norm2 = nn.LayerNorm(dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, dim * mlp_ratio), nn.GELU(), nn.Dropout(drop),
+            nn.Linear(dim * mlp_ratio, dim), nn.Dropout(drop))
+
+    def forward(self, x):
+        return x + self.mlp(self.norm2(self.filter(self.norm1(x))))
+
+
+class GFNet(nn.Module):
+    """Small Global Filter Network: patch embedding, filter blocks, pooled linear head."""
+
+    def __init__(self, num_classes=2, in_ch=1, img_size=224, patch=16,
+                 dim=128, depth=4, mlp_ratio=4, drop=0.1):
+        super().__init__()
+        g = img_size // patch  # token grid is g x g (14 x 14 for 224 / 16)
+        self.patch_embed = nn.Conv2d(in_ch, dim, kernel_size=patch, stride=patch)
+        self.pos = nn.Parameter(torch.zeros(1, g * g, dim))
+        nn.init.trunc_normal_(self.pos, std=0.02)
+        self.drop = nn.Dropout(drop)
+        self.blocks = nn.Sequential(*[GFNetBlock(dim, g, g, mlp_ratio, drop) for _ in range(depth)])
+        self.norm = nn.LayerNorm(dim)
+        self.head = nn.Linear(dim, num_classes)
+
+    def forward(self, x):
+        x = self.patch_embed(x).flatten(2).transpose(1, 2)  # (batch, tokens, dim)
+        x = self.drop(x + self.pos)
+        x = self.norm(self.blocks(x)).mean(dim=1)           # average over tokens
+        return self.head(x)
