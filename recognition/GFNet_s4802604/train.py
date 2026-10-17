@@ -48,9 +48,10 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--leaky", action="store_true", help="use the provided (leaky) split")
+    ap.add_argument("--tag", default="", help="suffix for output file names")
     args = ap.parse_args()
 
-    name = f"{args.model}_{'leaky' if args.leaky else 'clean'}"
+    name = f"{args.model}_{'leaky' if args.leaky else 'clean'}{args.tag}"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(42)
 
