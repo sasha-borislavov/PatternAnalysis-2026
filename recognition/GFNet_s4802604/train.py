@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 
 from dataset import WORK, get_loaders
-from modules import BaselineCNN
+from modules import BaselineCNN, GFNet
 
 
 def evaluate(model, loader, device):
@@ -43,7 +43,7 @@ def evaluate(model, loader, device):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="baseline", choices=["baseline"])
+    ap.add_argument("--model", default="baseline", choices=["baseline", "gfnet"])
     ap.add_argument("--epochs", type=int, default=15)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--batch-size", type=int, default=64)
@@ -55,7 +55,7 @@ def main():
     torch.manual_seed(42)
 
     train_dl, val_dl, test_dl = get_loaders(args.batch_size, leaky=args.leaky)
-    model = BaselineCNN().to(device)
+    model = (GFNet() if args.model == "gfnet" else BaselineCNN()).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     crit = nn.CrossEntropyLoss()
     n_params = sum(p.numel() for p in model.parameters())

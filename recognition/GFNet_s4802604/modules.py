@@ -3,6 +3,7 @@
 BaselineCNN: small 4-block convolutional network used as the comparison
 baseline for the confidence/calibration investigation. GFNet is added later.
 """
+import torch
 import torch.nn as nn
 
 
@@ -60,3 +61,27 @@ class GFNet(nn.Module):
         x = self.drop(x + self.pos)
         x = self.norm(self.blocks(x)).mean(dim=1)           # average over tokens
         return self.head(x)
+
+
+class GlobalFilter(nn.Module):
+    """Learnable filter applied in the frequency domain (the core of GFNet).
+
+    Input is a grid of h x w patch tokens with `dim` channels. We take a 2D FFT
+    over the grid, multiply each frequency by a learnable complex number, and
+    transform back. Complex weights are stored as a real tensor with a last
+    dimension of 2 (real, imaginary) so the optimiser handles them normally.
+    """
+
+    def __init__(self, dim, h=14, w=14):
+        super().__init__()
+        self.h, self.w = h, w
+        # rfft2 keeps w // 2 + 1 frequencies along the width (real input is symmetric)
+        self.weight = nn.Parameter(torch.randn(h, w // 2 + 1, dim, 2) * 0.02)
+
+    def forward(self, x):  # x: (batch, h * w, dim)
+        B, N, C = x.shape
+        x = x.float().reshape(B, self.h, self.w, C)  # FFT needs float32
+        X = torch.fft.rfft2(x, dim=(1, 2), norm="ortho")
+        X = X * torch.view_as_complex(self.weight)
+        x = torch.fft.irfft2(X, s=(self.h, self.w), dim=(1, 2), norm="ortho")
+        return x.reshape(B, N, C)
