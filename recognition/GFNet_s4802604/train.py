@@ -49,6 +49,10 @@ def main():
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--leaky", action="store_true", help="use the provided (leaky) split")
     ap.add_argument("--tag", default="", help="suffix for output file names")
+    ap.add_argument("--dim", type=int, default=128, help="GFNet embedding width")
+    ap.add_argument("--depth", type=int, default=4, help="GFNet number of blocks")
+    ap.add_argument("--drop", type=float, default=0.1, help="GFNet dropout")
+    ap.add_argument("--wd", type=float, default=1e-4, help="AdamW weight decay")
     args = ap.parse_args()
 
     name = f"{args.model}_{'leaky' if args.leaky else 'clean'}{args.tag}"
@@ -56,8 +60,8 @@ def main():
     torch.manual_seed(42)
 
     train_dl, val_dl, test_dl = get_loaders(args.batch_size, leaky=args.leaky)
-    model = (GFNet() if args.model == "gfnet" else BaselineCNN()).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    model = (GFNet(dim=args.dim, depth=args.depth, drop=args.drop) if args.model == "gfnet" else BaselineCNN()).to(device)
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
     crit = nn.CrossEntropyLoss()
     n_params = sum(p.numel() for p in model.parameters())
     print(f"{name}: {n_params:,} parameters, device={device}")
