@@ -25,10 +25,25 @@ class BaselineCNN(nn.Module):
         return self.classifier(self.pool(self.features(x)).flatten(1))
 
 
+class DropPath(nn.Module):
+    """Stochastic depth: during training, skip a block's residual branch for random samples."""
+
+    def __init__(self, p=0.0):
+        super().__init__()
+        self.p = p
+
+    def forward(self, x):
+        if self.p == 0.0 or not self.training:
+            return x
+        keep = 1.0 - self.p
+        mask = x.new_empty(x.shape[0], 1, 1).bernoulli_(keep)
+        return x * mask / keep
+
+
 class GFNetBlock(nn.Module):
     """norm -> frequency filter -> norm -> MLP, with one residual connection."""
 
-    def __init__(self, dim, h, w, mlp_ratio=4, drop=0.1):
+    def __init__(self, dim, h, w, mlp_ratio=4, drop=0.1, drop_path=0.0):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
         self.filter = GlobalFilter(dim, h, w)
@@ -36,23 +51,37 @@ class GFNetBlock(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(dim, dim * mlp_ratio), nn.GELU(), nn.Dropout(drop),
             nn.Linear(dim * mlp_ratio, dim), nn.Dropout(drop))
+        self.drop_path = DropPath(drop_path)
 
     def forward(self, x):
-        return x + self.mlp(self.norm2(self.filter(self.norm1(x))))
+        return x + self.drop_path(self.mlp(self.norm2(self.filter(self.norm1(x)))))
 
 
 class GFNet(nn.Module):
-    """Small Global Filter Network: patch embedding, filter blocks, pooled linear head."""
+    """Small Global Filter Network: patch embedding, filter blocks, pooled linear head.
+
+    conv_stem=True swaps the single linear patch projection for a small
+    convolutional stem (two stride-2 convs, then a strided conv) with the same
+    overall downsampling, so the model gets local features before the filters.
+    """
 
     def __init__(self, num_classes=2, in_ch=1, img_size=224, patch=16,
-                 dim=128, depth=4, mlp_ratio=4, drop=0.1):
+                 dim=128, depth=4, mlp_ratio=4, drop=0.1, drop_path=0.0, conv_stem=False):
         super().__init__()
         g = img_size // patch  # token grid is g x g (14 x 14 for 224 / 16)
-        self.patch_embed = nn.Conv2d(in_ch, dim, kernel_size=patch, stride=patch)
+        if conv_stem:
+            k = patch // 4
+            self.patch_embed = nn.Sequential(
+                nn.Conv2d(in_ch, 32, 3, stride=2, padding=1), nn.BatchNorm2d(32), nn.GELU(),
+                nn.Conv2d(32, 64, 3, stride=2, padding=1), nn.BatchNorm2d(64), nn.GELU(),
+                nn.Conv2d(64, dim, kernel_size=k, stride=k))
+        else:
+            self.patch_embed = nn.Conv2d(in_ch, dim, kernel_size=patch, stride=patch)
         self.pos = nn.Parameter(torch.zeros(1, g * g, dim))
         nn.init.trunc_normal_(self.pos, std=0.02)
         self.drop = nn.Dropout(drop)
-        self.blocks = nn.Sequential(*[GFNetBlock(dim, g, g, mlp_ratio, drop) for _ in range(depth)])
+        rates = [drop_path * i / max(depth - 1, 1) for i in range(depth)]
+        self.blocks = nn.Sequential(*[GFNetBlock(dim, g, g, mlp_ratio, drop, rates[i]) for i in range(depth)])
         self.norm = nn.LayerNorm(dim)
         self.head = nn.Linear(dim, num_classes)
 

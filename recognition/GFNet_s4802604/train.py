@@ -6,6 +6,7 @@ The loss/accuracy plot is saved next to this file for the README.
 """
 import argparse
 import json
+import math
 import time
 from collections import defaultdict
 
@@ -57,6 +58,11 @@ def main():
     ap.add_argument("--smooth", type=float, default=0.0, help="label smoothing")
     ap.add_argument("--select", default="loss", choices=["loss", "scan_acc"], help="checkpoint rule")
     ap.add_argument("--strong-aug", action="store_true", help="stronger training augmentation")
+    ap.add_argument("--drop-path", type=float, default=0.0, help="GFNet stochastic depth rate")
+    ap.add_argument("--conv-stem", action="store_true", help="GFNet with a convolutional stem")
+    ap.add_argument("--warmup", type=int, default=0, help="linear LR warmup epochs")
+    ap.add_argument("--cosine", action="store_true", help="cosine LR decay after warmup")
+    ap.add_argument("--mixup", type=float, default=0.0, help="mixup Beta alpha (0 = off)")
     args = ap.parse_args()
 
     name = f"{args.model}_{'leaky' if args.leaky else 'clean'}{args.tag}"
@@ -64,21 +70,38 @@ def main():
     torch.manual_seed(42)
 
     train_dl, val_dl, test_dl = get_loaders(args.batch_size, leaky=args.leaky, strong_aug=args.strong_aug)
-    model = (GFNet(dim=args.dim, depth=args.depth, drop=args.drop, patch=args.patch) if args.model == "gfnet" else BaselineCNN()).to(device)
+    model = (GFNet(dim=args.dim, depth=args.depth, drop=args.drop, patch=args.patch, drop_path=args.drop_path, conv_stem=args.conv_stem) if args.model == "gfnet" else BaselineCNN()).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
     crit = nn.CrossEntropyLoss(label_smoothing=args.smooth)
+
+    def lr_at(ep):  # ep counts from 0
+        if args.warmup and ep < args.warmup:
+            return args.lr * (ep + 1) / args.warmup
+        if args.cosine:
+            frac = (ep - args.warmup) / max(1, args.epochs - args.warmup)
+            return args.lr * (0.01 + 0.99 * 0.5 * (1 + math.cos(math.pi * frac)))
+        return args.lr
+
     n_params = sum(p.numel() for p in model.parameters())
     print(f"{name}: {n_params:,} parameters, device={device}")
 
     hist = {"train_loss": [], "val_loss": [], "val_slice_acc": [], "val_scan_acc": []}
     best_score, ckpt = float("-inf"), f"{WORK}/{name}.pth"
     for epoch in range(1, args.epochs + 1):
+        for g in opt.param_groups:
+            g["lr"] = lr_at(epoch - 1)
         model.train()
         t0, run_loss, seen = time.time(), 0.0, 0
         for x, y, _ in train_dl:
             x, y = x.to(device), y.to(device)
             opt.zero_grad()
-            loss = crit(model(x), y)
+            if args.mixup > 0:
+                lam = float(torch.distributions.Beta(args.mixup, args.mixup).sample())
+                idx = torch.randperm(x.size(0), device=device)
+                out = model(lam * x + (1 - lam) * x[idx])
+                loss = lam * crit(out, y) + (1 - lam) * crit(out, y[idx])
+            else:
+                loss = crit(model(x), y)
             loss.backward()
             opt.step()
             run_loss += loss.item() * y.numel()
