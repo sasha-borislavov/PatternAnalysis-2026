@@ -51,7 +51,7 @@ def get_scan_lists(index, leaky=False, seed=42):
 
 
 class ADNISlices(Dataset):
-    def __init__(self, split, leaky=False, augment=False, mean=0.0, std=1.0, size=IMG_SIZE):
+    def __init__(self, split, leaky=False, augment=False, mean=0.0, std=1.0, size=IMG_SIZE, strong=False):
         meta = json.load(open(META))
         index = build_index()
         self.samples = []  # (path, label, scan_id), one per slice
@@ -62,7 +62,10 @@ class ADNISlices(Dataset):
                 self.samples.append((f"{entry['folder']}/{fname}", label, scan_id))
 
         ops = [transforms.Resize((size, size))]
-        if augment:  # training only; no flips, since left/right matters in brain MRI
+        if augment and strong:  # training only; no flips, since left/right matters in brain MRI
+            ops += [transforms.RandomAffine(degrees=15, translate=(0.1, 0.1), scale=(0.9, 1.1)),
+                    transforms.ColorJitter(brightness=0.3, contrast=0.3)]
+        elif augment:
             ops += [transforms.RandomRotation(10),
                     transforms.ColorJitter(brightness=0.2, contrast=0.2)]
         ops += [transforms.ToTensor(), transforms.Normalize([mean], [std])]
@@ -96,11 +99,11 @@ def compute_mean_std(leaky=False, num_workers=4):
     return mean, std
 
 
-def get_loaders(batch_size=64, leaky=False, num_workers=4):
+def get_loaders(batch_size=64, leaky=False, num_workers=4, strong_aug=False):
     """Return train, val, test DataLoaders (shuffle and augmentation on train only)."""
     mean, std = compute_mean_std(leaky, num_workers)
     sets = {
-        "train": ADNISlices("train", leaky, augment=True, mean=mean, std=std),
+        "train": ADNISlices("train", leaky, augment=True, mean=mean, std=std, strong=strong_aug),
         "val": ADNISlices("val", leaky, mean=mean, std=std),
         "test": ADNISlices("test", leaky, mean=mean, std=std),
     }

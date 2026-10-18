@@ -53,21 +53,25 @@ def main():
     ap.add_argument("--depth", type=int, default=4, help="GFNet number of blocks")
     ap.add_argument("--drop", type=float, default=0.1, help="GFNet dropout")
     ap.add_argument("--wd", type=float, default=1e-4, help="AdamW weight decay")
+    ap.add_argument("--patch", type=int, default=16, help="GFNet patch size")
+    ap.add_argument("--smooth", type=float, default=0.0, help="label smoothing")
+    ap.add_argument("--select", default="loss", choices=["loss", "scan_acc"], help="checkpoint rule")
+    ap.add_argument("--strong-aug", action="store_true", help="stronger training augmentation")
     args = ap.parse_args()
 
     name = f"{args.model}_{'leaky' if args.leaky else 'clean'}{args.tag}"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(42)
 
-    train_dl, val_dl, test_dl = get_loaders(args.batch_size, leaky=args.leaky)
-    model = (GFNet(dim=args.dim, depth=args.depth, drop=args.drop) if args.model == "gfnet" else BaselineCNN()).to(device)
+    train_dl, val_dl, test_dl = get_loaders(args.batch_size, leaky=args.leaky, strong_aug=args.strong_aug)
+    model = (GFNet(dim=args.dim, depth=args.depth, drop=args.drop, patch=args.patch) if args.model == "gfnet" else BaselineCNN()).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
-    crit = nn.CrossEntropyLoss()
+    crit = nn.CrossEntropyLoss(label_smoothing=args.smooth)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"{name}: {n_params:,} parameters, device={device}")
 
     hist = {"train_loss": [], "val_loss": [], "val_slice_acc": [], "val_scan_acc": []}
-    best_val, ckpt = float("inf"), f"{WORK}/{name}.pth"
+    best_score, ckpt = float("-inf"), f"{WORK}/{name}.pth"
     for epoch in range(1, args.epochs + 1):
         model.train()
         t0, run_loss, seen = time.time(), 0.0, 0
@@ -84,8 +88,9 @@ def main():
         hist["val_loss"].append(val["loss"])
         hist["val_slice_acc"].append(val["slice_acc"])
         hist["val_scan_acc"].append(val["scan_acc"])
-        if val["loss"] < best_val:
-            best_val = val["loss"]
+        score = -val["loss"] if args.select == "loss" else val["scan_acc"]
+        if score > best_score:
+            best_score = score
             torch.save(model.state_dict(), ckpt)
         print(f"epoch {epoch:02d} train_loss {run_loss / seen:.4f} val_loss {val['loss']:.4f} "
               f"val_slice_acc {val['slice_acc']:.3f} val_scan_acc {val['scan_acc']:.3f} "
