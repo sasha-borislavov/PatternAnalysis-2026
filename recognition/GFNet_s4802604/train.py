@@ -62,12 +62,13 @@ def main():
     ap.add_argument("--conv-stem", action="store_true", help="GFNet with a convolutional stem")
     ap.add_argument("--warmup", type=int, default=0, help="linear LR warmup epochs")
     ap.add_argument("--cosine", action="store_true", help="cosine LR decay after warmup")
+    ap.add_argument("--seed", type=int, default=42, help="random seed")
     ap.add_argument("--mixup", type=float, default=0.0, help="mixup Beta alpha (0 = off)")
     args = ap.parse_args()
 
     name = f"{args.model}_{'leaky' if args.leaky else 'clean'}{args.tag}"
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    torch.manual_seed(42)
+    torch.manual_seed(args.seed)
 
     train_dl, val_dl, test_dl = get_loaders(args.batch_size, leaky=args.leaky, strong_aug=args.strong_aug)
     model = (GFNet(dim=args.dim, depth=args.depth, drop=args.drop, patch=args.patch, drop_path=args.drop_path, conv_stem=args.conv_stem) if args.model == "gfnet" else BaselineCNN()).to(device)
