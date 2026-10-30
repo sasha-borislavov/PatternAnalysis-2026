@@ -1,7 +1,28 @@
 """Models for ADNI AD vs NC classification (PyTorch only, no NumPy).
 
 BaselineCNN: small 4-block convolutional network used as the comparison
-baseline for the confidence/calibration investigation. GFNet is added later.
+baseline for the confidence/calibration investigation.
+
+GFNet: Global Filter Network, with an optional convolutional stem.
+
+GFNet design (GlobalFilter layer, Global Filter blocks, overall architecture):
+    Y. Rao, W. Zhao, Z. Zhu, J. Lu, J. Zhou, "Global Filter Networks for Image
+    Classification", NeurIPS 2021 (arXiv:2107.00645). Each block replaces
+    self-attention with an FFT, a learnable complex filter and an inverse FFT.
+    The layer here is my own PyTorch implementation of the method described in
+    that paper (rfft2 / irfft2 with a learnable filter of shape H x (W//2+1) x D),
+    written with AI assistance as described in the README.
+
+Convolutional stem (conv_stem=True), which replaces the paper's single 16 x 16
+patch embedding with three small convolutions:
+    T. Xiao, M. Singh, E. Mintun, T. Darrell, P. Dollar, R. Girshick,
+    "Early Convolutions Help Transformers See Better", NeurIPS 2021
+    (arXiv:2106.14881). The idea of using a small stack of stride-2 convolutions
+    instead of a single large-patch embedding comes from this work. The specific
+    layer sizes here are my own choice for 224 x 224 single-channel MRI slices.
+
+DropPath (stochastic depth) follows G. Huang et al., "Deep Networks with
+Stochastic Depth", ECCV 2016.
 """
 import torch
 import torch.nn as nn
